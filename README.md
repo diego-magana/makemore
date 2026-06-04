@@ -1,5 +1,7 @@
 # makemore
 
+![CI](https://github.com/diego-magana/makemore/actions/workflows/ci.yml/badge.svg)
+
 A character-level language model series from bigram counts to a hierarchical WaveNet, with a look inside at what the trained model actually learned.
 
 Built as an extension of Karpathy's [makemore](https://github.com/karpathy/makemore) series. Beyond the implementation, the main thing I wanted to understand was what the trained WaveNet actually learned — `notebooks/06_probing.ipynb` is my attempt to answer that.
