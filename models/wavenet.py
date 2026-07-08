@@ -1,40 +1,11 @@
-"""
-Hierarchical WaveNet for character-level language modeling.
+"""Hierarchical WaveNet for character-level language modeling — the final model.
 
-This is the final model in the progression. Architecturally it is a stack of
-three `(FlattenConsecutive(2), Linear, BatchNorm, Tanh)` blocks followed by
-an output linear projection. Each block fuses adjacent positions in the
-context window and projects through a nonlinearity, producing a hierarchical
-receptive field:
-
-    Input    (B, 8)                  raw character indices
-    Embed    (B, 8, 24)              learned 24-d character vectors
-    Block 1  (B, 4, 128)             bigram-level features
-    Block 2  (B, 2, 128)             4-gram-level features
-    Block 3  (B, 128)                full 8-character representation (squeezed)
-    Output   (B, 27)                 logits
-
-Compared to a flat MLP with the same total parameter count, this hierarchical
-factorization (a) builds in the inductive bias that locality matters, and
-(b) lets the model learn progressively more abstract features at each level.
-The probing analysis in `notebooks/06_probing.ipynb` characterizes what
-these features actually become after training.
-
-Hyperparameters (matching Karpathy's reference implementation):
-    block_size = 8     — context window. 8-character history is enough to
-                         capture name-internal phonological dependencies
-                         (cf. block_size=3 in the MLP, which is just 3rd-
-                         order Markov).
-    n_embd     = 24    — embedding dimensionality. Larger than the MLP's 10
-                         to give the model room to encode the richer
-                         distinctions it needs at 8 positions.
-    n_hidden   = 128   — width of each hierarchical level. Constant across
-                         levels — the depth, not the width, is what gives
-                         the hierarchy its expressive power.
-
-These values are intentionally kept at Karpathy's reference settings (not
-tuned upward to get better numbers) so the loss table in the README is
-directly comparable to the published reference.
+Three ``(FlattenConsecutive(2), Linear, BatchNorm, Tanh)`` blocks over an 8-character
+context, then an output projection. Each block fuses adjacent positions, so the
+receptive field grows bigram -> 4-gram -> full-8 with depth — the locality inductive
+bias a flat MLP lacks. Hyperparameters (block_size=8, n_embd=24, n_hidden=128) match
+Karpathy's reference settings unchanged, so the README loss table stays directly
+comparable. The probing notebook characterizes what the levels actually learn.
 """
 
 import torch

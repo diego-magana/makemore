@@ -1,48 +1,12 @@
-"""
-MLP with Kaiming initialization and BatchNorm — the production-quality
-single-layer model and the stepping-stone to WaveNet's modular stack.
+"""MLP with Kaiming init + BatchNorm — the production-quality single-hidden-layer
+model and the stepping-stone to WaveNet's modular stack.
 
-This is the same architecture as `mlp.py` (one hidden layer, tanh, linear
-output) with two changes that together reduce val NLL from ~2.16 to ~2.10
-and stabilize training:
-
-1. *Kaiming initialization* with the tanh gain of 5/3. The weights of the
-   first linear layer are scaled by `(5/3) / sqrt(fan_in)`, which keeps the
-   pre-activation variance at ~1 across the layer — putting tanh in its
-   responsive (high-gradient) regime rather than its saturated regime.
-
-2. *Output layer scaled down* by 0.01. The final-layer weights `W2` are
-   multiplied by 0.01 so the initial logits are near zero, which means the
-   initial softmax is approximately uniform over the 27 classes, which
-   means the initial loss is approximately `log(27) ≈ 3.30`. Without this,
-   the initial logits are random N(0,1)-scaled values and produce a
-   "confidently wrong" initial softmax that takes the first hundred steps
-   of training just to undo. This is sometimes called fixing the "hockey
-   stick" loss curve.
-
-3. *Batch normalization* applied after the linear pre-activation. This
-   forces the input to tanh to zero mean and unit variance across the
-   batch, decoupling layer-wise scale issues from the optimization
-   dynamics. See `makemore/layers.py::BatchNorm1d` for full discussion.
-
-A subtle correctness point that appears here for the first time:
-*the bias is dropped from the linear layer immediately before BatchNorm*.
-
-Proof that bias is redundant after BatchNorm:
-
-    Let z = Wx + b be the linear pre-activation.
-    BN(z) = (z - mean(z)) / std(z) * gamma + beta
-
-    mean(z) = mean(Wx) + b   (b is a constant; mean is linear)
-    z - mean(z) = (Wx + b) - (mean(Wx) + b) = Wx - mean(Wx)
-
-    So b is subtracted out exactly. The remaining scale-and-shift is
-    governed entirely by gamma, beta — which are BN's own learnable
-    parameters. Keeping b would only add `n_hidden` extra parameters
-    that contribute nothing the network can't already express via beta.
-
-We keep the bias on `W2` (the output linear) because it is *not* followed
-by BatchNorm — the output goes straight into the softmax + cross-entropy.
+Same architecture as ``mlp.py`` with three changes that drop val NLL ~2.16 -> ~2.10
+and stabilize training: Kaiming init with the tanh 5/3 gain (keeps pre-activations
+in tanh's responsive range), output weights scaled by 0.01 (near-uniform initial
+softmax, so initial loss ~log(27) rather than a confidently-wrong start), and
+BatchNorm after the pre-activation. The pre-BN Linear drops its bias — BatchNorm's
+mean-subtraction cancels a constant bias exactly, and its ``beta`` plays that role.
 """
 
 import torch

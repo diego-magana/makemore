@@ -37,45 +37,11 @@ import torch.nn.functional as F
 class MLP:
     """Bengio 2003 MLP for character-level next-token prediction.
 
-    Parameter count breakdown (block_size=3, n_embd=10, n_hidden=200,
-    vocab=27):
-        C  : (27, 10)        =     270
-        W1 : (30, 200)       =   6,000
-        b1 : (200,)          =     200
-        W2 : (200, 27)       =   5,400
-        b2 : (27,)           =      27
-        ─────────────────────────────────
-        Total                =  11,897
-
-    Initialization choices (the bare minimum at this stage — see
-    `mlp_batchnorm.py` for the production version):
-
-    - C drawn from N(0, 1). Embeddings start with no preference for any
-      character; learning shapes them. At convergence the geometry
-      reflects what the network has decided about character similarity
-      (see `06_probing.ipynb`).
-    - W1, b1, W2, b2 drawn from N(0, 1) — *deliberately not Kaiming*.
-      This naive initialization is part of the pedagogical arc: it
-      produces a noticeably worse loss than `mlp_batchnorm.py` and lets
-      the next notebook in the progression demonstrate why init matters.
-
-    Shape annotation through the forward pass:
-        x         : (B, block_size)         integer indices
-        emb       : (B, block_size, n_embd)  C[x] — embedding lookup
-        emb.view  : (B, block_size * n_embd) flattened along context dim
-        h         : (B, n_hidden)            tanh(emb_flat @ W1 + b1)
-        logits    : (B, vocab_size)          h @ W2 + b2
-
-    `emb.view(-1, block_size * n_embd)` flattens the `block_size` embedding
-    vectors into a single context vector of length `block_size * n_embd`.
-    Note `.view()` requires the underlying tensor to be contiguous in
-    memory — `C[x]` produces a fresh contiguous tensor, so this is fine
-    here, but if the embedding lookup were followed by transpose-like
-    operations, `.contiguous()` would be needed first or PyTorch would
-    raise. The substantively important point is that this flattening
-    *concatenates* the embeddings — the network sees the full ordered
-    context as a single 30-dimensional input rather than as 3 separate
-    10-dimensional inputs.
+    Embeds each of ``block_size`` context characters, concatenates the embeddings
+    into one context vector, and runs it through a tanh hidden layer to a softmax
+    over the vocabulary. Initialization is deliberately naive N(0,1) — not Kaiming —
+    so the next model (``mlp_batchnorm.py``) can demonstrate why init matters.
+    ~11.9K params at block_size=3, n_embd=10, n_hidden=200.
     """
 
     def __init__(self, vocab_size, block_size=3, n_embd=10, n_hidden=200,

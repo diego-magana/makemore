@@ -34,39 +34,14 @@ def set_layer_training(model, training):
 
 def train(model, Xtr, Ytr, steps, batch_size=32, lr_schedule=None, log_every=None,
           seed=2147483647):
-    """Train `model` via minibatch SGD with negative log-likelihood loss.
+    """Train ``model`` via minibatch SGD on cross-entropy (NLL) loss.
 
-    The four-step training cycle, executed once per minibatch:
-
-        1. Forward pass — produce logits from the minibatch.
-        2. Loss — cross-entropy between logits and targets, i.e. NLL after
-           an implicit log-softmax. PyTorch's F.cross_entropy fuses these for
-           numerical stability (the log-sum-exp trick avoids underflow when
-           logits are large or negative).
-        3. Zero gradients — set `p.grad = None` for every parameter. We use
-           `= None` rather than `.zero_()` because `zero_()` allocates a
-           dense gradient tensor even for parameters that won't receive a
-           gradient on the next step; the embedding table in particular only
-           sees gradient on the rows indexed by the current batch, and a
-           sparse update through `= None` saves a `(vocab_size, n_embd)`-
-           sized allocation per step. (At small scale this is negligible;
-           the habit matters at larger vocabularies.)
-        4. Backward — accumulate gradients onto every parameter.
-        5. Update — vanilla SGD: `p.data += -lr * p.grad`.
-
-    Minibatch sampling: drawing 32 random indices per step gives noisy but
-    cheap gradient estimates. The noise is a feature, not a bug — it lets
-    the optimizer escape sharp local minima and acts as implicit
-    regularization. The alternative (full-batch GD over all 200K+ training
-    examples) is 6000x more expensive per step and converges to a worse
-    minimum in practice.
-
-    `lr_schedule` is a callable `step -> lr`. The default is a step decay
-    from 0.1 to 0.01 at the halfway point — aggressive at first to make
-    rapid progress, smaller at the end to fine-tune without overshooting.
-    Pass `lambda step: 0.1` for a flat schedule when desired.
-
-    Returns: list of per-step losses (for plotting the training curve).
+    Each step: forward -> cross-entropy (``F.cross_entropy`` fuses log-softmax + NLL
+    for stability) -> zero grads via ``p.grad = None`` (skips a dense allocation for
+    the sparsely-updated embedding table; see the README) -> backward -> SGD update.
+    A batch of 32 gives cheap, noisy gradients that also act as light regularization.
+    ``lr_schedule`` is a ``step -> lr`` callable (default: step-decay 0.1 -> 0.01 at
+    the halfway point). Returns the per-step loss list for plotting.
     """
     g = torch.Generator().manual_seed(seed)
     if lr_schedule is None:
