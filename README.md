@@ -2,115 +2,96 @@
 
 ![CI](https://github.com/diego-magana/makemore/actions/workflows/ci.yml/badge.svg)
 
-A character-level language model series from bigram counts to a hierarchical WaveNet, with a look inside at what the trained model actually learned.
+Five character-level language models trained on 32K first names, from a count-based bigram to a hierarchical WaveNet, followed by an analysis of what the trained WaveNet learned.
 
-Built as an extension of Karpathy's [makemore](https://github.com/karpathy/makemore) series. Beyond the implementation, the main thing I wanted to understand was what the trained WaveNet actually learned — `notebooks/06_probing.ipynb` is my attempt to answer that.
+The models follow Karpathy's [makemore](https://github.com/karpathy/makemore) series. This is the second repo in a series: [micrograd](https://github.com/diego-magana/micrograd), this one, then [gpt](https://github.com/diego-magana/gpt).
 
-## What the trained model has learned
+## Models
 
-The WaveNet trained in this repository is a hierarchical character-level language model with an 8-character receptive field, 76,579 parameters, and a 3-level convolutional structure that builds up from bigram to 4-gram to full-context features. After 50K training steps it reaches val NLL 2.0128 on the names corpus. Here's what the probing analysis turned up.
+| Model | What it adds | Val NLL | Steps |
+|---|---|---:|---|
+| Count bigram | Baseline with Laplace smoothing | 2.4544 | closed form |
+| Neural bigram | The same model fit by gradient descent | 2.4623 | 200 |
+| MLP (Bengio 2003) | Learned embeddings, context window | 2.2957 | 30K |
+| MLP + Kaiming + BatchNorm | Stable activations, modular layers | 2.1750 | 30K |
+| Hierarchical WaveNet | 8-character receptive field | 2.0128 | 50K |
 
-**Embedding geometry — partial phonological structure.** Cosine similarity analysis of the 27-character embedding space reveals a robust vowel/non-vowel distinction: mean vowel-vowel cosine similarity is +0.18 while mean consonant-consonant similarity is essentially zero (-0.002). The boundary token `.` sits closest to vowels (cosine = +0.27), which matches the corpus bigram statistics — names overwhelmingly start and end with vowel-like sounds. Finer distinctions within consonants aren't visible: PCA only captures 22% of the variance at 24 dimensions, so there may be structure that just isn't showing up in the projection.
+The two bigrams are the same model class fit two ways, so they reach about the same loss. Karpathy's reference WaveNet reaches about 1.99 at roughly 200K steps. I stopped at 50K because the goal here is the implementation and the analysis, not the benchmark.
 
-![Embedding similarity](assets/embedding_similarity.png)
+`notebooks/progression/04_backprop_ninja.ipynb` retrains the MLP + BatchNorm model with handwritten gradients and no `loss.backward()`. Each gradient is checked against autograd. The result is a dev NLL of 2.1739, within about 0.001 of the autograd version.
 
-**Activation distributions — engineering verification.** Histograms of post-Tanh activations at each of the three hierarchical levels confirm that the Kaiming + BatchNorm protocol produces stable activation regimes throughout the deeper architecture. Saturated fractions (|activation| > 0.97) are 9.8% / 12.0% / 5.4% across the bigram, 4-gram, and 8-gram levels — all well below the 15% diagnostic threshold. One genuine structural finding: the level-3 distribution is visibly bimodal with mass concentrated *just inside* the saturation threshold, which suggests the final-level units operate closer to binary-detector behavior than the intermediate levels do.
+## What the WaveNet learned
 
-**Context sensitivity — the proxy and the intervention disagree.** My prior was that the immediately-preceding character would dominate — the natural expectation for an autoregressive model. The gradient proxy says otherwise: sensitivity is nearly flat across all 8 positions, most-recent/oldest ratio 1.18×. But gradient magnitude is a proxy, not a measurement, so I ran the intervention — replacing each position's embedding with its dataset-mean, so the network can't read which character was there, and measuring the dev-NLL hit. The causal picture is the opposite: wiping the most recent character costs ~+0.8 nats, the oldest ~+0.003 — a clean monotonic recency gradient across two orders of magnitude (a permutation ablation gives the same shape). So the flat gradient was the misleading measure; the model leans heavily on recent context, exactly as the prior predicted, and only the intervention showed it. This is the sharpest case in the repo for why the `gpt` work leans on causal intervention over gradient attribution — here the two flatly disagree, and only the intervention is right.
+The analysis is in [`notebooks/06_probing.ipynb`](notebooks/06_probing.ipynb). The model has 76,579 parameters and three levels that see 2, 4 and 8 characters.
+
+### Recent characters matter most, and gradients miss it
+
+Gradient magnitude with respect to each input position is nearly flat across all 8 positions (most recent to oldest ratio of 1.18x). That suggests the model uses the whole context evenly.
+
+Ablation says otherwise. Replacing a position's embedding with the dataset mean raises dev NLL by about 0.8 nats for the most recent character and about 0.003 for the oldest, with a steady decline in between. A permutation ablation gives the same shape.
+
+The gradient measure was wrong here and the intervention was right. This is why the [gpt](https://github.com/diego-magana/gpt) repo relies on ablation and patching.
 
 ![Context sensitivity](assets/context_sensitivity.png)
 
-**Single-unit ablation — causal importance concentrates at level 3.** The top-5 highest-activation neurons at each hierarchical level were individually zeroed during dev-set evaluation. Knocking out a single level-3 (8-gram) neuron can increase dev NLL by up to +0.027 nats; the same operation at the bigram or 4-gram level rarely exceeds +0.006 nats. This matches the architectural intent — the final level is where all prior structure gets folded into the representation before the output projection. That said, ablating single units tells you which neurons are load-bearing for overall prediction, not what they actually compute.
+### Embeddings separate vowels from consonants
 
-**What this analysis doesn't show.** Most of these techniques are correlational; the ablations — per-position and single-unit — are the causal exceptions, and they measure *importance for prediction*, not *what a component encodes*. I can show that vowels cluster, that the model depends on recent context, and that level-3 neurons matter, but not *why* the representations are organized this way or what phonological computation any individual neuron implements. That needs max-activating-examples analysis and finer interventions — activation patching, causal scrubbing — which work more naturally on transformers with an explicit residual stream. That's the next step in the GPT repository.
+Mean cosine similarity between vowel embeddings is +0.18. Between consonants it is about zero (-0.002). The boundary token `.` sits closest to the vowels (+0.27), which matches how often names start and end with a vowel. I did not find finer structure among consonants. PCA on the 24-dimensional embeddings captures only 22% of the variance, so a 2D projection may be hiding some.
 
-## What it builds
+![Embedding similarity](assets/embedding_similarity.png)
 
-Five models trained on 32K first names, each adding a key architectural ingredient:
+### Single neurons matter most at the top level
 
-| Model | Key addition | Val NLL | Steps |
-|-------|-------------|---------|-------|
-| Count bigram | Statistical baseline + Laplace smoothing | 2.4544 | closed-form |
-| Neural bigram | Gradient descent on the same model | 2.4623 | 200 steps¹ |
-| MLP (Bengio 2003) | Learned embeddings + context window | 2.2957 | 30K steps |
-| MLP + Kaiming + BatchNorm | Stable activations, modular layers | 2.1750 | 30K steps |
-| Hierarchical WaveNet | Receptive field over `block_size=8` | 2.0128 | 50K steps |
+I zeroed the five highest-activation neurons at each level, one at a time. A single level-3 neuron can raise dev NLL by up to 0.027 nats. At levels 1 and 2 the effect rarely exceeds 0.006.
 
-¹ *The neural bigram is fit on a strictly convex objective and converges reliably to the count bigram's loss within 200 gradient steps; further training produces no meaningful improvement.*
+### Activations stay healthy at depth
 
-Step counts are noted because this isn't a training benchmark — the artifact is the implementation and analysis. Karpathy's reference WaveNet result of ~1.99 nats is reached at ~200K steps; the ~0.02-nat gap at 50K steps doesn't affect the probing analysis, which characterizes representation structure that's largely stable once the model has converged to its general regime.
+The share of saturated tanh units (|activation| > 0.97) is 9.8%, 12.0% and 5.4% across the three levels, under the 15% threshold I used as a warning sign. Level 3 is bimodal, with mass just inside the saturation threshold.
 
-The neural bigram converges to the same loss as the count bigram by design — they're two views of the same model class (one fit by enumeration, the other by gradient descent on a strictly convex objective). The conceptual bridge matters: every model after the bigram is the same idea (fit conditional distributions by gradient descent) with progressively richer parametrizations.
+### Limits
 
-A separate notebook (`04_backprop_ninja.ipynb`) re-trains the MLP+BatchNorm architecture using only handwritten gradient calculus — no `loss.backward()` anywhere in the training loop. Every gradient is verified against PyTorch's autograd via a `cmp()` oracle. The manually-trained model reaches Dev NLL 2.1739, matching the autograd version to ~0.001 nats. There's nothing in `loss.backward()` that isn't reproducible by hand.
+The ablations show which positions and neurons matter for prediction. They do not show what any neuron computes. The embedding and activation analyses are correlational. Answering the "what" question needs activation patching, which is easier on a transformer and is the subject of the gpt repo.
 
 ## Run it
 
 ```bash
 pip install -r requirements.txt
 pip install -e .
-
-# Run the progression in order
-jupyter notebook notebooks/progression/01_bigram.ipynb
-jupyter notebook notebooks/progression/02_mlp.ipynb
-jupyter notebook notebooks/progression/03_batchnorm.ipynb
-jupyter notebook notebooks/progression/04_backprop_ninja.ipynb
-jupyter notebook notebooks/progression/05_wavenet.ipynb
-
-# Then the primary analysis
-jupyter notebook notebooks/06_probing.ipynb
+jupyter lab notebooks/    # progression/01 to 05 in order, then 06_probing
+pytest
 ```
 
-The probing notebook loads a pre-trained WaveNet checkpoint from `assets/wavenet.pth` — committed to the repository specifically so the analysis is standalone-reproducible without re-running the 50K-step training. The `.gitignore` excludes `.pth` files by default but carves out an exception for this checkpoint.
+`assets/wavenet.pth` is committed so the probing notebook runs without the 50K-step training.
 
-## Repository layout
+## Layout
 
 ```
 makemore/
-├── makemore/                   ← reusable Python package
-│   ├── data.py                 tokenization, dataset construction, splits
-│   ├── layers.py               Linear, BatchNorm1d, Tanh, Embedding,
-│   │                           FlattenConsecutive, Sequential
-│   └── train.py                training loop, evaluation, sampling
-├── models/                     ← model implementations
-│   ├── bigram.py               CountBigram, NeuralBigram
-│   ├── mlp.py                  Bengio 2003 MLP + LR finder
-│   ├── mlp_batchnorm.py        MLP + Kaiming + BatchNorm
-│   └── wavenet.py              hierarchical WaveNet + checkpointing
+├── makemore/
+│   ├── data.py       tokenization, dataset construction, splits
+│   ├── layers.py     Linear, BatchNorm1d, Tanh, Embedding, FlattenConsecutive, Sequential
+│   └── train.py      training loop, evaluation, sampling
+├── models/
+│   ├── bigram.py           CountBigram, NeuralBigram
+│   ├── mlp.py              Bengio 2003 MLP, LR finder
+│   ├── mlp_batchnorm.py    MLP + Kaiming + BatchNorm
+│   └── wavenet.py          hierarchical WaveNet, checkpointing
 ├── notebooks/
-│   ├── 06_probing.ipynb        ← primary original contribution
-│   └── progression/            ← architectural progression (development arc)
-│       ├── 01_bigram.ipynb
-│       ├── 02_mlp.ipynb
-│       ├── 03_batchnorm.ipynb
-│       ├── 04_backprop_ninja.ipynb
-│       └── 05_wavenet.ipynb
-├── assets/
-│   ├── bigram_matrix.png
-│   ├── embedding_similarity.png
-│   ├── embedding_clusters.png
-│   ├── activation_distributions.png
-│   ├── context_sensitivity.png
-│   └── wavenet.pth             pre-trained model checkpoint
-├── data/
-│   └── names.txt               32K first names corpus
-├── pyproject.toml
-├── requirements.txt
-└── README.md
+│   ├── 06_probing.ipynb
+│   └── progression/        01 bigram, 02 MLP, 03 BatchNorm, 04 manual backprop, 05 WaveNet
+├── assets/                 figures, wavenet.pth
+├── data/                   names.txt
+└── tests/
 ```
 
 ## Implementation notes
 
-**Why `p.grad = None` rather than `p.grad.zero_()`.** Setting grad to `None` lets PyTorch skip allocating the gradient tensor on the next forward pass if the parameter is unused. For the embedding table specifically, only indexed rows receive gradients — `zero_()` would allocate a dense `(vocab_size, n_embd)` matrix when a sparse update suffices. At vocab_size=27 the savings are negligible; the habit matters at vocab sizes that real language models actually use (50K+).
-
-**Why the bias disappears after BatchNorm.** `BN(Wx + b)` subtracts the batch mean — the bias `b` is a constant offset that the mean subtraction cancels exactly. The learnable `β` in BatchNorm plays the role of bias in the post-normalized space, so keeping `b` in the preceding Linear would add parameters that contribute nothing the network can't already express. Every `Linear` immediately preceding a `BatchNorm1d` in this repo uses `bias=False`.
-
-**Why initial logits are scaled toward zero.** Without scaling, the final linear layer's weights produce logits with standard deviation ≈ `sqrt(fan_in)`, leading to a "confidently wrong" initial softmax and an initial cross-entropy loss of ~27. Scaling the final layer's weights by 0.01 (MLP+BN) or 0.1 (WaveNet) starts training with near-uniform predictions and an initial loss of ~`log(27) = 3.30`. The first hundred training steps no longer need to be spent just undoing initialization.
-
-**What the hierarchical receptive field actually does.** A flat `FlattenConsecutive(8)` would force the first hidden layer to simultaneously learn all relationships across the 8-character context, with no notion that position 0 and position 7 are six positions apart. `FlattenConsecutive(2)` applied iteratively decomposes this: Layer 1 sees adjacent character pairs, Layer 2 sees 4-character windows (operating on Layer 1's bigram features), Layer 3 integrates the full 8-character context. Whether these levels correspond to phonological units (phonemes, syllable fragments, syllables) is the question that motivates the probing analysis — and a question that probing alone can't fully settle.
-
-**BatchNorm buffer shapes and `nn.Module`.** When not using `nn.Module`, BatchNorm running buffers acquire a keepdim shape on the first forward pass (`(1, dim)` for 2D inputs, `(1, 1, dim)` for 3D) that differs from their `(dim,)` initialization shape — because the EMA update reassigns from `x.mean(dim, keepdim=True)`, whose shape is keepdim-preserving. Saving and restoring these buffers requires assignment-by-reference rather than `tensor.copy_()`, which would fail with a shape-mismatch broadcast error against the freshly-initialized buffer. This is the class of state-management bug that `nn.Module` handles automatically via `register_buffer()`. The fix is implemented in `models/wavenet.py::load_checkpoint`.
+- Every `Linear` followed by `BatchNorm1d` uses `bias=False`. BatchNorm subtracts the batch mean, which cancels the bias, and its own `β` takes over that role.
+- The final layer's weights are scaled down (0.01 for the MLP, 0.1 for the WaveNet) so initial predictions are near uniform. The initial loss is then about `log(27) = 3.30` instead of about 27.
+- `FlattenConsecutive(2)` is applied three times, so each level merges adjacent pairs from the level below. A single `FlattenConsecutive(8)` would make the first hidden layer learn all 8 positions at once.
+- Gradients are reset with `p.grad = None`, not `p.grad.zero_()`. It makes no difference at this size and is the cheaper habit on large models.
+- The layers do not use `nn.Module`, so BatchNorm's running buffers change shape after the first forward pass. `models/wavenet.py::load_checkpoint` handles this by assigning the saved buffers directly. `register_buffer()` would normally take care of it.
 
 ## Attribution
 
-Built as an extension of Karpathy's [makemore](https://github.com/karpathy/makemore) series. The architectures — bigram, MLP, BatchNorm, backprop ninja, WaveNet — follow his Zero to Hero videos. What I added: a modular Python package, a manual-backprop verification that every gradient is reproducible without `loss.backward()`, and a probing analysis — including a causal position-ablation that overturns the gradient-based context measure — of what the trained model learned.
+The architectures follow Andrej Karpathy's [makemore](https://github.com/karpathy/makemore) and his Zero to Hero videos. The package structure, the manual backprop verification and the probing analysis are mine.
